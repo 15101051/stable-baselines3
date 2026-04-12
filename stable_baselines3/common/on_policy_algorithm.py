@@ -336,6 +336,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
             self.train()
 
+            callback.on_after_train()
+
         callback.on_training_end()
 
         return self

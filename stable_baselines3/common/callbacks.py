@@ -126,6 +126,12 @@ class BaseCallback(ABC):
     def _on_rollout_end(self) -> None:
         pass
 
+    def on_after_train(self) -> None:
+        self._on_after_train()
+
+    def _on_after_train(self) -> None:
+        pass
+
     def update_locals(self, locals_: dict[str, Any]) -> None:
         """
         Update the references to the local variables.
@@ -227,6 +233,10 @@ class CallbackList(BaseCallback):
     def _on_rollout_end(self) -> None:
         for callback in self.callbacks:
             callback.on_rollout_end()
+
+    def _on_after_train(self) -> None:
+        for callback in self.callbacks:
+            callback.on_after_train()
 
     def _on_training_end(self) -> None:
         for callback in self.callbacks:
@@ -727,3 +737,156 @@ class ProgressBarCallback(BaseCallback):
         # Flush and close progress bar
         self.pbar.refresh()
         self.pbar.close()
+
+
+class AfterTrainEvalCallback(BaseCallback):
+    """Evaluate the agent after each policy update, not during rollout collection.
+
+    Uses the ``on_after_train`` hook so that eval resets don't corrupt
+    the on-policy rollout buffer.
+
+    Args:
+        eval_env: environment for evaluation (can be the same as train env)
+        n_eval_episodes: number of episodes per evaluation
+        eval_freq: evaluate every ``eval_freq`` calls to ``on_after_train``
+            (i.e. every ``eval_freq`` policy updates)
+        log_path: path to save evaluation results as npz
+        best_model_save_path: path to save the best model
+        deterministic: use deterministic actions during eval
+        verbose: verbosity level
+    """
+
+    def __init__(
+        self,
+        eval_env: Union[gym.Env, VecEnv],
+        n_eval_episodes: int = 5,
+        eval_freq: int = 1,
+        log_path: Optional[str] = None,
+        best_model_save_path: Optional[str] = None,
+        deterministic: bool = True,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose=verbose)
+        if not isinstance(eval_env, VecEnv):
+            eval_env = DummyVecEnv([lambda: eval_env])
+        self.eval_env = eval_env
+        self.n_eval_episodes = n_eval_episodes
+        self.eval_freq = eval_freq
+        self.deterministic = deterministic
+        self.best_model_save_path = best_model_save_path
+        self.best_mean_reward = -np.inf
+
+        if log_path is not None:
+            log_path = os.path.join(log_path, "evaluations")
+        self.log_path = log_path
+        self.evaluations_results: list[list[float]] = []
+        self.evaluations_timesteps: list[int] = []
+        self.evaluations_length: list[list[int]] = []
+        self.evaluations_successes: list[list[bool]] = []
+        self._is_success_buffer: list[bool] = []
+        self._n_after_train_calls = 0
+
+    def _init_callback(self) -> None:
+        if self.best_model_save_path is not None:
+            os.makedirs(self.best_model_save_path, exist_ok=True)
+        if self.log_path is not None:
+            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+
+    def _on_step(self) -> bool:
+        # Not used — eval happens in _on_after_train
+        return True
+
+    def _log_success_callback(
+        self, locals_: dict[str, Any], globals_: dict[str, Any]
+    ) -> None:
+        info = locals_["info"]
+        if locals_["done"]:
+            maybe_is_success = info.get("is_success")
+            if maybe_is_success is not None:
+                self._is_success_buffer.append(maybe_is_success)
+
+    def _on_after_train(self) -> None:
+        self._n_after_train_calls += 1
+        if self.eval_freq <= 0 or self._n_after_train_calls % self.eval_freq != 0:
+            return
+
+        # Sync normalization stats if needed
+        if self.model.get_vec_normalize_env() is not None:
+            try:
+                sync_envs_normalization(self.training_env, self.eval_env)
+            except AttributeError as e:
+                raise AssertionError(
+                    "Training and eval env are not wrapped the same way."
+                ) from e
+
+        self._is_success_buffer = []
+
+        episode_rewards, episode_lengths = evaluate_policy(
+            self.model,
+            self.eval_env,
+            n_eval_episodes=self.n_eval_episodes,
+            render=False,
+            deterministic=self.deterministic,
+            return_episode_rewards=True,
+            warn=True,
+            callback=self._log_success_callback,
+        )
+
+        assert isinstance(episode_rewards, list)
+        assert isinstance(episode_lengths, list)
+
+        mean_reward = float(np.mean(episode_rewards))
+        std_reward = float(np.std(episode_rewards))
+        mean_ep_length = float(np.mean(episode_lengths))
+
+        if self.verbose >= 1:
+            print(
+                f"After-train eval num_timesteps={self.num_timesteps}, "
+                f"episode_reward={mean_reward:.2f} +/- {std_reward:.2f}, "
+                f"ep_length={mean_ep_length:.2f}"
+            )
+
+        self.logger.record("eval/mean_reward", mean_reward)
+        self.logger.record("eval/mean_ep_length", mean_ep_length)
+
+        if len(self._is_success_buffer) > 0:
+            success_rate = np.mean(self._is_success_buffer)
+            if self.verbose >= 1:
+                print(f"Success rate: {100 * success_rate:.2f}%")
+            self.logger.record("eval/success_rate", success_rate)
+
+        # Save logs
+        if self.log_path is not None:
+            self.evaluations_timesteps.append(self.num_timesteps)
+            self.evaluations_results.append(episode_rewards)
+            self.evaluations_length.append(episode_lengths)
+            kwargs = {}
+            if len(self._is_success_buffer) > 0:
+                self.evaluations_successes.append(self._is_success_buffer)
+                kwargs = dict(successes=self.evaluations_successes)
+            np.savez(
+                self.log_path,
+                timesteps=self.evaluations_timesteps,
+                results=self.evaluations_results,
+                ep_lengths=self.evaluations_length,
+                **kwargs,
+            )
+
+        # Save best model
+        if mean_reward > self.best_mean_reward:
+            if self.verbose >= 1:
+                print("New best mean reward!")
+            self.best_mean_reward = mean_reward
+            if self.best_model_save_path is not None:
+                self.model.save(
+                    os.path.join(self.best_model_save_path, "best_model")
+                )
+
+        self.logger.dump(self.num_timesteps)
+
+        # --- Sync model state with env after eval ---
+        # eval may have reset the env (especially if sharing the same instance).
+        # We must ensure model._last_obs matches the env's actual state.
+        obs = self.eval_env.reset()
+        self.model._last_obs = obs
+        self.model._last_episode_starts = np.array([True] * self.eval_env.num_envs)
