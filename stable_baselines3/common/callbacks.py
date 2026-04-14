@@ -758,11 +758,11 @@ class AfterTrainEvalCallback(BaseCallback):
 
     def __init__(
         self,
-        eval_env: Union[gym.Env, VecEnv],
+        eval_env: gym.Env | VecEnv,
         n_eval_episodes: int = 5,
         eval_freq: int = 1,
-        log_path: Optional[str] = None,
-        best_model_save_path: Optional[str] = None,
+        log_path: str | None = None,
+        best_model_save_path: str | None = None,
         deterministic: bool = True,
         verbose: int = 1,
     ):
