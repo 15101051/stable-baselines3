@@ -450,7 +450,7 @@ class EvalCallback(EventCallback):
         info = locals_["info"]
 
         if locals_["done"]:
-            maybe_is_success = info.get("is_success")
+            maybe_is_success = info.get("success")
             if maybe_is_success is not None:
                 self._is_success_buffer.append(maybe_is_success)
 
@@ -801,7 +801,7 @@ class AfterTrainEvalCallback(BaseCallback):
     ) -> None:
         info = locals_["info"]
         if locals_["done"]:
-            maybe_is_success = info.get("is_success")
+            maybe_is_success = info.get("success")
             if maybe_is_success is not None:
                 self._is_success_buffer.append(maybe_is_success)
 

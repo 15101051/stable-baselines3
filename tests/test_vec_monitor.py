@@ -56,14 +56,14 @@ def test_vec_monitor_info_keywords(tmp_path):
 
     env = DummyVecEnv([lambda: BitFlippingEnv()])
 
-    monitor_env = VecMonitor(env, info_keywords=("is_success",), filename=monitor_file)
+    monitor_env = VecMonitor(env, info_keywords=("success",), filename=monitor_file)
 
     monitor_env.reset()
     total_steps = 1000
     for _ in range(total_steps):
         _, _, dones, infos = monitor_env.step([monitor_env.action_space.sample()])
         if dones[0]:
-            assert "is_success" in infos[0]["episode"]
+            assert "success" in infos[0]["episode"]
 
     monitor_env.close()
 

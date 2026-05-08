@@ -203,7 +203,7 @@ class BitFlippingEnv(Env):
         terminated = reward == 0
         self.current_step += 1
         # Episode terminate when we reached the goal or the max number of steps
-        info = {"is_success": terminated}
+        info = {"success": terminated}
         truncated = self.current_step >= self.max_steps
         return obs, reward, terminated, truncated, info
 

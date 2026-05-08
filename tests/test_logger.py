@@ -585,7 +585,7 @@ class DummySuccessEnv(gym.Env):
         info = {}
         if truncated:
             maybe_success = self.dummy_success[self.log_id][self.ep_id]
-            info["is_success"] = maybe_success
+            info["success"] = maybe_success
             self.ep_id += 1
         return self.observation_space.sample(), 0.0, False, truncated, info
 
@@ -610,7 +610,7 @@ def test_rollout_success_rate_onpolicy_algo(tmp_path):
 
     # Monitor the env to track the success info
     monitor_file = str(tmp_path / "monitor.csv")
-    env = Monitor(DummySuccessEnv(dummy_successes, ep_steps), filename=monitor_file, info_keywords=("is_success",))
+    env = Monitor(DummySuccessEnv(dummy_successes, ep_steps), filename=monitor_file, info_keywords=("success",))
     steps_per_log = env.unwrapped.steps_per_log
 
     # Equip the model of a custom logger to check the success_rate info
