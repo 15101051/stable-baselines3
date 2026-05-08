@@ -2,6 +2,34 @@
 
 # Changelog
 
+## Release 2.9.0a2 (WIP)
+
+### Breaking Changes:
+- Relaxed Gymnasium version range (from `"gymnasium>=0.29.1,<1.3.0"` to `"gymnasium>=0.29.1,<2.0"`)
+- `pandas` and `matplotlib` are no longer core dependencies; they are now optional and only required for loading results and plotting (moved to `stable-baselines3[extra]`).
+- Moved `read_json` and `read_csv` helper functions to test files
+
+### New Features:
+
+### Bug Fixes:
+- Fixed deprecated error Taxi-v3 from gymnasium v1.3.0 in tests
+
+### [SB3-Contrib]
+
+### [RL Zoo]
+
+### [SBX] (SB3 + Jax)
+
+### Deprecations:
+
+### Others:
+
+- Optimized tests (faster to run)
+
+### Documentation:
+
+- Added example for using torch.compile
+
 ## Release 2.8.0 (2026-04-01)
 
 **Dropped Python 3.9, added Python 3.13 support, MaskablePPO bug fix, default hyperparams for unlisted env in the RL Zoo, Markdown doc**
