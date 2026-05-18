@@ -229,6 +229,8 @@ class SACPolicy(BasePolicy):
         optimizer_kwargs: dict[str, Any] | None = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
+        actor_exclude_obs: list[str] | None = None,
+        critic_exclude_obs: list[str] | None = None,
     ):
         super().__init__(
             observation_space,
@@ -256,6 +258,9 @@ class SACPolicy(BasePolicy):
             "normalize_images": normalize_images,
         }
         self.actor_kwargs = self.net_args.copy()
+        if actor_exclude_obs is not None:
+            assert isinstance(self.observation_space, spaces.Dict), "actor_exclude_obs is only supported for Dict observation space"
+            self.actor_kwargs['observation_space'] = spaces.Dict({k: v for k, v in self.observation_space.items() if k not in actor_exclude_obs})
 
         sde_kwargs = {
             "use_sde": use_sde,
@@ -272,6 +277,9 @@ class SACPolicy(BasePolicy):
                 "share_features_extractor": share_features_extractor,
             }
         )
+        if critic_exclude_obs is not None:
+            assert isinstance(self.observation_space, spaces.Dict), "critic_exclude_obs is only supported for Dict observation space"
+            self.critic_kwargs['observation_space'] = spaces.Dict({k: v for k, v in self.observation_space.items() if k not in critic_exclude_obs})
 
         self.share_features_extractor = share_features_extractor
 
@@ -479,6 +487,8 @@ class MultiInputPolicy(SACPolicy):
         optimizer_kwargs: dict[str, Any] | None = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
+        actor_exclude_obs: list[str] | None = None,
+        critic_exclude_obs: list[str] | None = None,
     ):
         super().__init__(
             observation_space,
@@ -497,4 +507,6 @@ class MultiInputPolicy(SACPolicy):
             optimizer_kwargs,
             n_critics,
             share_features_extractor,
+            actor_exclude_obs,
+            critic_exclude_obs,
         )
