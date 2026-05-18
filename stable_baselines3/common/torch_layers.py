@@ -1,3 +1,5 @@
+import pickle
+
 import gymnasium as gym
 import torch as th
 from gymnasium import spaces
@@ -309,6 +311,37 @@ class CombinedExtractor(BaseFeaturesExtractor):
         for key, extractor in self.extractors.items():
             encoded_tensor_list.append(extractor(observations[key]))
         return th.cat(encoded_tensor_list, dim=1)
+
+
+class CombinedExtractorWithLoadedImageEncoder(CombinedExtractor):
+    def __init__(
+        self,
+        observation_space: spaces.Dict,
+        image_extractor_pickles: dict[str, str],
+        image_extractor_dim: int,
+        normalized_image: bool = False,
+    ) -> None:
+        # TODO we do not know features-dim here before going over all the items, so put something there. This is dirty!
+        super(CombinedExtractor, self).__init__(observation_space, features_dim=1)
+
+        extractors: dict[str, nn.Module] = {}
+
+        total_concat_size = 0
+        for key, subspace in observation_space.spaces.items():
+            if is_image_space(subspace, normalized_image=normalized_image):
+                # Load the pre-trained image extractor from the pickle file
+                with open(image_extractor_pickles[key], 'rb') as f:
+                    extractors[key] = pickle.load(f)
+                total_concat_size += image_extractor_dim
+            else:
+                # The observation key is a vector, flatten it if needed
+                extractors[key] = nn.Flatten()
+                total_concat_size += get_flattened_obs_dim(subspace)
+
+        self.extractors = nn.ModuleDict(extractors)
+
+        # Update the features dim manually
+        self._features_dim = total_concat_size
 
 
 def get_actor_critic_arch(net_arch: list[int] | dict[str, list[int]]) -> tuple[list[int], list[int]]:
