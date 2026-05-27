@@ -9,6 +9,7 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy, ContinuousCritic
+from stable_baselines3.common.prioritized_replay_buffer import PrioritizedReplayBuffer
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
 from stable_baselines3.sac.policies import Actor, CnnPolicy, MlpPolicy, MultiInputPolicy, SACPolicy
@@ -101,7 +102,7 @@ class SAC(OffPolicyAlgorithm):
         train_freq: int | tuple[int, str] = 1,
         gradient_steps: int = 1,
         action_noise: ActionNoise | None = None,
-        replay_buffer_class: type[ReplayBuffer] | None = None,
+        replay_buffer_class: type[ReplayBuffer] | str | None = None,
         replay_buffer_kwargs: dict[str, Any] | None = None,
         optimize_memory_usage: bool = False,
         n_steps: int = 1,
@@ -119,6 +120,7 @@ class SAC(OffPolicyAlgorithm):
         device: th.device | str = "auto",
         _init_setup_model: bool = True,
     ):
+        replay_buffer_class = PrioritizedReplayBuffer if replay_buffer_class == 'prioritized_replay_buffer' else replay_buffer_class
         super().__init__(
             policy,
             env,
@@ -264,7 +266,12 @@ class SAC(OffPolicyAlgorithm):
             current_q_values = self.critic(replay_data.observations, replay_data.actions)
 
             # Compute critic loss
-            critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
+            td_errors = [th.abs(current_q - target_q_values) for current_q in current_q_values]
+            replay_weights, replay_indices = getattr(replay_data, "weights", None), getattr(replay_data, "leaf_nodes_indices", None)
+            if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
+                critic_loss = sum((replay_weights * th.where(td_error < 1.0, 0.5 * td_error.pow(2), td_error - 0.5,)).mean() for td_error in td_errors)
+            else:
+                critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
             assert isinstance(critic_loss, th.Tensor)  # for type checker
             critic_losses.append(critic_loss.item())  # type: ignore[union-attr]
 
@@ -272,6 +279,10 @@ class SAC(OffPolicyAlgorithm):
             self.critic.optimizer.zero_grad()
             critic_loss.backward()
             self.critic.optimizer.step()
+
+            if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
+                priorities = th.stack([td_error.detach() for td_error in td_errors], dim=0).max(dim=0).values
+                self.replay_buffer.update_priorities(replay_indices, priorities, self._current_progress_remaining)
 
             # Compute actor loss
             # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
