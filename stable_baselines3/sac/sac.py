@@ -270,7 +270,7 @@ class SAC(OffPolicyAlgorithm):
             td_errors = [th.abs(current_q - target_q_values) for current_q in current_q_values]
             replay_weights, replay_indices = getattr(replay_data, "weights", None), getattr(replay_data, "leaf_nodes_indices", None)
             if isinstance(self.replay_buffer, PrioritizedReplayBuffer):
-                critic_loss = sum((replay_weights * th.where(td_error < 1.0, 0.5 * td_error.pow(2), td_error - 0.5,)).mean() for td_error in td_errors)
+                critic_loss = 0.5 * sum((replay_weights * td_error.pow(2)).mean() for td_error in td_errors)
             else:
                 critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
             assert isinstance(critic_loss, th.Tensor)  # for type checker
