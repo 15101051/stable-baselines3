@@ -1,4 +1,5 @@
 from typing import Any
+from collections import deque
 
 import numpy as np
 import torch as th
@@ -117,6 +118,7 @@ class PrioritizedReplayBuffer(DictReplayBuffer):
         min_priority: float = 1e-6,
     ):
         super().__init__(buffer_size, observation_space, action_space, device, n_envs)
+        assert n_envs == 1
 
         assert optimize_memory_usage is False, "PrioritizedReplayBuffer doesn't support optimize_memory_usage=True"
 
@@ -126,10 +128,10 @@ class PrioritizedReplayBuffer(DictReplayBuffer):
         # Track the training progress remaining (from 1 to 0)
         # this is used to update beta
         self._current_progress_remaining = 1.0
-        self.inital_beta = beta
+        self.initial_beta = beta
         self.final_beta = final_beta
         self.beta_schedule = get_linear_fn(
-            self.inital_beta,
+            self.initial_beta,
             self.final_beta,
             end_fraction=1.0,
         )
@@ -173,7 +175,7 @@ class PrioritizedReplayBuffer(DictReplayBuffer):
             to normalize the observations/rewards when sampling
         :return: a batch of sampled experiences from the buffer.
         """
-        assert self.buffer_size >= batch_size, "The buffer contains less samples than the batch size requires."
+        assert self.size() >= batch_size, "The buffer contains less samples than the batch size requires."
 
         leaf_nodes_indices = np.zeros(batch_size, dtype=np.uint32)
         priorities = np.zeros((batch_size, 1))
@@ -250,3 +252,79 @@ class PrioritizedReplayBuffer(DictReplayBuffer):
             self.tree.update(leaf_node_idx, priority)
             # Update max priority for new samples
             self.max_priority = max(self.max_priority, priority)
+
+
+DictTransition = tuple[dict[str, np.ndarray], dict[str, np.ndarray], np.ndarray, float, bool, dict[str, Any]]
+
+
+class PrioritizedReplayBufferWithSuccess(PrioritizedReplayBuffer):
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Dict,
+        action_space: spaces.Space,
+        device: th.device | str = "auto",
+        n_envs: int = 1,
+        alpha: float = 0.5,
+        beta: float = 0.4,
+        final_beta: float = 1.0,
+        optimize_memory_usage: bool = False,
+        min_priority: float = 1e-6,
+        success_portion: float = 0.5
+    ):
+        super().__init__(buffer_size, observation_space, action_space, device, n_envs, alpha, beta, final_beta, optimize_memory_usage, min_priority)
+        self.success_portion = success_portion
+        self.current_episode_transitions: list[deque[DictTransition]] = [deque() for _ in range(n_envs)]
+        self.success_buffer = DictReplayBuffer(buffer_size, observation_space, action_space, device, 1, optimize_memory_usage)
+
+    def add(
+        self,
+        obs: dict[str, np.ndarray],
+        next_obs: dict[str, np.ndarray],
+        action: np.ndarray,
+        reward: np.ndarray,
+        done: np.ndarray,
+        infos: list[dict[str, Any]],
+    ) -> None:
+        super().add(obs, next_obs, action, reward, done, infos)
+        for env_id in range(self.n_envs):
+            e_obs, e_next_obs = {key: value[env_id] for key, value in obs.items()}, {key: value[env_id] for key, value in next_obs.items()}
+            e_done, e_info = bool(done[env_id]), infos[env_id]
+            self.current_episode_transitions[env_id].append((e_obs, e_next_obs, action[env_id], float(reward[env_id]), e_done, e_info))
+            if e_done:
+                if e_info['success']:
+                    for transition in self.current_episode_transitions[env_id]:
+                        e_obs = {key: value[None, ...] for key, value in transition[0].items()}
+                        e_next_obs = {key: value[None, ...] for key, value in transition[1].items()}
+                        self.success_buffer.add(e_obs, e_next_obs, transition[2][None, ...], np.array([transition[3]]), np.array([transition[4]]), [transition[5]])
+                self.current_episode_transitions[env_id].clear()
+
+    def merge_samples(self, s1: DictReplayBufferSamples, s2: DictReplayBufferSamples) -> DictReplayBufferSamples:
+        assert isinstance(s1.weights, float) and isinstance(s2.weights, th.Tensor) and s1.leaf_nodes_indices is None and s2.leaf_nodes_indices is not None
+        if s1.discounts is None:
+            assert s2.discounts is None
+            discounts = None
+        else:
+            assert s2.discounts is not None
+            discounts = th.concat([s1.discounts, s2.discounts])
+        return DictReplayBufferSamples(
+            {key: th.concat([s1.observations[key], s2.observations[key]]) for key in s1.observations},
+            th.concat([s1.actions, s2.actions]),
+            {key: th.concat([s1.next_observations[key], s2.next_observations[key]]) for key in s1.next_observations},
+            th.concat([s1.dones, s2.dones]),
+            th.concat([s1.rewards, s2.rewards]),
+            th.concat([th.full_like(s1.rewards, s1.weights), s2.weights]),
+            np.concatenate([np.full(s1.rewards.shape, -1), s2.leaf_nodes_indices]),
+            discounts
+        )
+
+    def sample(self, batch_size, env = None):
+        success_count = min(max(1, int(batch_size * self.success_portion)), self.success_buffer.size())
+        print(f'Sample {success_count} success transitions and {batch_size - success_count} any transitions')
+        if success_count == 0:
+            return super().sample(batch_size, env)
+        return self.merge_samples(self.success_buffer.sample(success_count), super().sample(batch_size - success_count, env))
+    
+    def update_priorities(self, leaf_nodes_indices, td_errors, progress_remaining):
+        available_indices = leaf_nodes_indices != -1
+        return super().update_priorities(leaf_nodes_indices[available_indices], td_errors[available_indices], progress_remaining)
