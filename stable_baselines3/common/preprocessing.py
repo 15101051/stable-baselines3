@@ -109,6 +109,8 @@ def preprocess_obs(
         assert isinstance(obs, dict), f"Expected dict, got {type(obs)}"
         preprocessed_obs = {}
         for key, _obs in obs.items():
+            if key not in observation_space.spaces:
+                continue
             preprocessed_obs[key] = preprocess_obs(_obs, observation_space[key], normalize_images=normalize_images)
         return preprocessed_obs  # type: ignore[return-value]
 

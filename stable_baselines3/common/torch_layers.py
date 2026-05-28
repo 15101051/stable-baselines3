@@ -313,6 +313,9 @@ class CombinedExtractor(BaseFeaturesExtractor):
         return th.cat(encoded_tensor_list, dim=1)
 
 
+_freeze_image_encoders = {}
+
+
 class CombinedExtractorWithLoadedImageEncoder(CombinedExtractor):
     def __init__(
         self,
@@ -329,9 +332,12 @@ class CombinedExtractorWithLoadedImageEncoder(CombinedExtractor):
         total_concat_size = 0
         for key, subspace in observation_space.spaces.items():
             if is_image_space(subspace, normalized_image=normalized_image):
-                # Load the pre-trained image extractor from the pickle file
-                with open(image_extractor_pickles[key], 'rb') as f:
-                    extractors[key] = pickle.load(f)
+                if key not in _freeze_image_encoders:
+                    # Load the pre-trained image extractor from the pickle file
+                    with open(image_extractor_pickles[key], 'rb') as f:
+                        _freeze_image_encoders[key] = pickle.load(f)
+                        _freeze_image_encoders[key].requires_grad_(False)  # Freeze the image extractor
+                extractors[key] = _freeze_image_encoders[key]
                 total_concat_size += image_extractor_dim
             else:
                 # The observation key is a vector, flatten it if needed

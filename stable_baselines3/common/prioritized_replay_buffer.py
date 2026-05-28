@@ -314,13 +314,13 @@ class PrioritizedReplayBufferWithSuccess(PrioritizedReplayBuffer):
             th.concat([s1.dones, s2.dones]),
             th.concat([s1.rewards, s2.rewards]),
             th.concat([th.full_like(s1.rewards, s1.weights), s2.weights]),
-            np.concatenate([np.full(s1.rewards.shape, -1), s2.leaf_nodes_indices]),
+            np.concatenate([np.full((s1.rewards.shape[0],), -1), s2.leaf_nodes_indices]),
             discounts
         )
 
     def sample(self, batch_size, env = None):
         success_count = min(max(1, int(batch_size * self.success_portion)), self.success_buffer.size())
-        print(f'Sample {success_count} success transitions and {batch_size - success_count} any transitions')
+        # print(f'Sample {success_count} success transitions and {batch_size - success_count} any transitions')
         if success_count == 0:
             return super().sample(batch_size, env)
         return self.merge_samples(self.success_buffer.sample(success_count), super().sample(batch_size - success_count, env))
